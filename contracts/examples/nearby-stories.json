@@ -1,0 +1,14 @@
+{
+  "items": [
+    {
+      "id": "story-seongsu-name-001",
+      "title": "성수동 이름의 유래",
+      "placeName": "성수동",
+      "category": "PLACE_NAME",
+      "distanceMeters": 620,
+      "durationSeconds": 48,
+      "hook": "성수동이라는 이름에는 두 장소의 이름이 담겨 있습니다.",
+      "saved": false
+    }
+  ]
+}

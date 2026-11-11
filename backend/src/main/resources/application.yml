@@ -1,0 +1,43 @@
+spring:
+  application:
+    name: road-story-backend
+  profiles:
+    default: local
+  autoconfigure:
+    exclude:
+      - org.springframework.boot.security.autoconfigure.UserDetailsServiceAutoConfiguration
+  datasource:
+    url: ${DATABASE_URL:jdbc:postgresql://localhost:5432/roadstory}
+    username: ${DATABASE_USERNAME:roadstory}
+    password: ${DATABASE_PASSWORD:roadstory}
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+  flyway:
+    enabled: false
+  jpa:
+    open-in-view: false
+  mvc:
+    problemdetails:
+      enabled: true
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+  endpoint:
+    health:
+      show-details: never
+server:
+  error:
+    include-message: never
+roadstory:
+  audio:
+    directory: ${ROAD_STORY_AUDIO_DIR:}
+springdoc:
+  api-docs:
+    path: /v3/api-docs
+  swagger-ui:
+    path: /swagger-ui.html
+    disable-swagger-default-url: true

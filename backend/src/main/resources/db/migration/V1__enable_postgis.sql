@@ -1,0 +1,9 @@
+CREATE EXTENSION IF NOT EXISTS postgis;
+
+CREATE TABLE IF NOT EXISTS story (
+    id VARCHAR(100) PRIMARY KEY,
+    title VARCHAR(300) NOT NULL,
+    verification_status VARCHAR(30) NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
