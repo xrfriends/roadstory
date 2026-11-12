@@ -54,7 +54,7 @@ android {
 
 dependencies {
     "pleosImplementation"("ai.pleos.playground:Vehicle:2.0.3")
-    "pleosImplementation"("ai.pleos.playground:NaviHelper:2.0.3")
+    "pleosImplementation"("ai.pleos.playground:NaviHelper:3.0.5")
     "pleosImplementation"("ai.pleos.playground:TextToSpeech:2.1.5.1")
     "pleosImplementation"("ai.pleos.playground:FusedLocation:1.1.3")
     testImplementation("junit:junit:4.13.2")

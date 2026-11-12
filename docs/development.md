@@ -54,7 +54,7 @@ Backend와 Android는 각각의 Wrapper를 사용한다. 아래 명령과 CI/Mak
 ANDROID_HOME=/path/to/android-sdk frontend/pleos-app/gradlew -p frontend/pleos-app \
   testFakeDebugUnitTest assembleFakeDebug
 
-# 공식 Vehicle 2.0.3, NaviHelper 2.0.3 SDK를 포함한 APK 검증
+# 공식 Vehicle 2.0.3, NaviHelper 3.0.5 SDK를 포함한 APK 검증
 ANDROID_HOME=/path/to/android-sdk frontend/pleos-app/gradlew -p frontend/pleos-app \
   assemblePleosDebug
 ```

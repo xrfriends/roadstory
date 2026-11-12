@@ -44,7 +44,7 @@ cd frontend/pleos-app
 ./gradlew assemblePleosRelease
 ```
 
-빌드 결과는 `app/build/outputs/apk/pleos/release/`에 생성됩니다. Pleos SDK 의존성은 [Pleos Playground Maven 저장소](https://nexus-playground.pleos.ai/repository/maven-releases/)에서 가져옵니다. 차량 앱은 Vehicle 2.0.3, NaviHelper 2.0.3, TextToSpeech 2.1.5.1, FusedLocation 1.1.3과 Android Automotive 주행 제한 API를 사용합니다. 위치 기능의 제공 여부는 기기 지원 상태에 따릅니다.
+빌드 결과는 `app/build/outputs/apk/pleos/release/`에 생성됩니다. Pleos SDK 의존성은 [Pleos Playground Maven 저장소](https://nexus-playground.pleos.ai/repository/maven-releases/)에서 가져옵니다. 차량 앱은 Vehicle 2.0.3, NaviHelper 3.0.5, TextToSpeech 2.1.5.1, FusedLocation 1.1.3과 Android Automotive 주행 제한 API를 사용합니다. 위치 기능의 제공 여부는 기기 지원 상태에 따릅니다.
 
 내비게이션 안내가 연결되면 앱은 목적지와 남은 시간을 받아 도착 전 들을 수 있는 이야기를 편성합니다. 현재 차량 연동의 편성 기준은 목적지 주변입니다. 비회원 보관함은 앱에 저장됩니다. 기본 데모는 공개 이야기 본문을 AI로 낭독한 [제출용 음원](demo-audio/)을 사용합니다. 이 음원으로 파일 재생과 오프라인 저장을 시험할 수 있습니다. 파일이 연결되지 않은 이야기는 Pleos TTS 서비스가 준비된 환경에서 재생됩니다.
 

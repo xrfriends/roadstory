@@ -7,8 +7,6 @@ import ai.pleos.playground.navi.helper.NaviHelper
 import ai.pleos.playground.navi.helper.listener.NaviHelperEventListener
 import android.content.pm.PackageManager
 import android.location.Location
-import android.os.Handler
-import android.os.Looper
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import org.junit.Assert.assertEquals
@@ -32,7 +30,7 @@ class NavigationGatewayDeviceTest {
         assertEquals(PackageManager.PERMISSION_GRANTED, context.checkSelfPermission("pleos.car.permission.NAVI_ROUTE_SEARCH"))
         val route = checkNotNull(readNaviRoute()) { "NaviHelper did not deliver its route state callback" }
         val expected = when {
-            !route.termsAgreement -> VehicleNavigationState.Unavailable::class.java
+            !route.termsAgreement || route.naviMode == NaviMode.NOT_WORKING -> VehicleNavigationState.Unavailable::class.java
             route.hasActiveRoute() -> VehicleNavigationState.Guiding::class.java
             else -> VehicleNavigationState.NoDestination::class.java
         }
@@ -124,7 +122,6 @@ class NavigationGatewayDeviceTest {
         confirmed: NavigationDestination?,
         restrictions: DrivingRestrictionSource,
     ) {
-        val handler = Handler(Looper.getMainLooper())
         val destinations = LinkedBlockingQueue<DestinationInfo>()
         val states = LinkedBlockingQueue<RouteStateInfo>()
         val cancelled = CountDownLatch(1)
@@ -144,11 +141,7 @@ class NavigationGatewayDeviceTest {
         }
         var sentCancellation = false
         try {
-            instrumentation.runOnMainSync {
-                navi.initialize()
-                navi.addListener(listener)
-                handler.postDelayed({ navi.getRouteStateInfo() }, 500L)
-            }
+            connectAndReadRoute(navi, listener)
             val route = states.poll(5, TimeUnit.SECONDS)
             if (route == null) {
                 assertTrue("Could not recheck the confirmed test route", confirmed == null)
@@ -180,7 +173,6 @@ class NavigationGatewayDeviceTest {
             }
         } finally {
             instrumentation.runOnMainSync {
-                handler.removeCallbacksAndMessages(null)
                 navi.removeListener(listener)
                 navi.release()
             }
@@ -198,7 +190,6 @@ class NavigationGatewayDeviceTest {
     }
 
     private fun readNaviRoute(): RouteStateInfo? {
-        val handler = Handler(Looper.getMainLooper())
         val replies = LinkedBlockingQueue<RouteStateInfo>()
         val navi = NaviHelper(context)
         val listener = object : NaviHelperEventListener {
@@ -207,18 +198,29 @@ class NavigationGatewayDeviceTest {
             }
         }
         return try {
-            instrumentation.runOnMainSync {
-                navi.initialize()
-                navi.addListener(listener)
-                handler.postDelayed({ navi.getRouteStateInfo() }, 500L)
-            }
+            connectAndReadRoute(navi, listener)
             replies.poll(10, TimeUnit.SECONDS)
         } finally {
             instrumentation.runOnMainSync {
-                handler.removeCallbacksAndMessages(null)
                 navi.removeListener(listener)
                 navi.release()
             }
+        }
+    }
+
+    private fun connectAndReadRoute(navi: NaviHelper, listener: NaviHelperEventListener) {
+        val connection = LinkedBlockingQueue<Result<Unit>>()
+        instrumentation.runOnMainSync {
+            navi.initialize(
+                onConnected = { connection.offer(Result.success(Unit)) },
+                onFailed = { connection.offer(Result.failure(it)) },
+            )
+        }
+        checkNotNull(connection.poll(15, TimeUnit.SECONDS)) { "NaviHelper did not report its connection result" }
+            .getOrThrow()
+        instrumentation.runOnMainSync {
+            navi.addListener(listener)
+            navi.getRouteStateInfo()
         }
     }
 

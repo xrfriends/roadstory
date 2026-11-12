@@ -2,7 +2,7 @@ package com.roadstory.pleos.platform
 
 import ai.pleos.playground.navi.constants.NaviErrorCode
 import ai.pleos.playground.navi.constants.NaviMode
-import ai.pleos.playground.navi.constants.RouteDriving
+import ai.pleos.playground.navi.constants.NavigationStatus
 import ai.pleos.playground.navi.data.DestinationArrivedInfo
 import ai.pleos.playground.navi.data.DestinationInfo
 import ai.pleos.playground.navi.data.RouteInfo
@@ -28,6 +28,7 @@ private class PleosNavigationGateway(private val context: Context) : NavigationG
     private val handler = Handler(Looper.getMainLooper())
     private val observers = mutableSetOf<(VehicleNavigationState) -> Unit>()
     private var sdk: NaviHelper? = null
+    private var sdkListener: NaviHelperEventListener? = null
     private var state: VehicleNavigationState = VehicleNavigationState.Loading
     private var lastDestination: NavigationDestination? = null
     private var revision = 0L
@@ -37,18 +38,24 @@ private class PleosNavigationGateway(private val context: Context) : NavigationG
     private var closed = false
 
     private val queryTimeout = Runnable {
-        val timedOut = query
+        val timedOut = query ?: return@Runnable
         query = null
-        if (timedOut?.generation == generation) publish(VehicleNavigationState.Unavailable)
-        else if (state == VehicleNavigationState.Loading) refresh()
+        // SDK responses carry no request ID. A timed-out client must not answer a later query.
+        releaseSdk()
+        if (timedOut.generation == generation) {
+            publish(VehicleNavigationState.Unavailable)
+            completeStop(false)
+        } else if (observers.isNotEmpty() || request != null) {
+            refresh()
+        }
     }
     private val stopTimeout = Runnable { completeStop(false) }
     private val checkRoute = Runnable { refresh() }
 
-    private val listener = object : NaviHelperEventListener {
-        override fun onRouteStateInfo(routeStateInfo: RouteStateInfo) = onMain {
-            if (!consumeQuery(QueryType.ROUTE_STATE)) return@onMain
-            if (!routeStateInfo.termsAgreement) {
+    private fun createListener(navi: NaviHelper) = object : NaviHelperEventListener {
+        override fun onRouteStateInfo(routeStateInfo: RouteStateInfo) = onSdk(navi) {
+            if (!consumeQuery(QueryType.ROUTE_STATE)) return@onSdk
+            if (!routeStateInfo.termsAgreement || routeStateInfo.naviMode == NaviMode.NOT_WORKING) {
                 publish(VehicleNavigationState.Unavailable)
                 completeStop(false)
             } else if (routeStateInfo.isRouting || routeStateInfo.naviMode == NaviMode.ROUTE_GUIDING ||
@@ -61,19 +68,18 @@ private class PleosNavigationGateway(private val context: Context) : NavigationG
             }
         }
 
-        override fun onDestinationInfo(destinationInfo: DestinationInfo) = onMain {
-            if (!consumeQuery(QueryType.DESTINATION)) return@onMain
+        override fun onDestinationInfo(destinationInfo: DestinationInfo) = onSdk(navi) {
+            if (!consumeQuery(QueryType.DESTINATION)) return@onSdk
             val latitude = destinationInfo.latitude
             val longitude = destinationInfo.longitude
             if (!validCoordinates(latitude, longitude)) {
                 lastDestination = null
                 publish(VehicleNavigationState.NoDestination)
-                return@onMain
+                return@onSdk
             }
-            // NaviHelper 2.0.3 uses navi-data 2.0.0.1, whose DestinationInfo specifies seconds.
             val destination = NavigationDestination(
                 destinationInfo.name.orEmpty().trim().ifEmpty { "내비게이션 목적지" }, latitude, longitude,
-                destinationInfo.totalTime.takeIf { it > 0 },
+                destinationInfo.remainTime.takeIf { it > 0 },
             )
             val previous = lastDestination
             if (previous != null && (latitude != previous.latitude || longitude != previous.longitude)) revision++
@@ -82,28 +88,18 @@ private class PleosNavigationGateway(private val context: Context) : NavigationG
             if (request?.let { matchesStop(destination, it.latitude, it.longitude) } == true) completeStop(true)
         }
 
-        override fun onRouteStarted(routeStartInfo: RouteStartInfo) = onMain {
-            invalidateRoute()
-            scheduleRefresh(ROUTE_UPDATE_DELAY_MS)
+        override fun onRouteStarted(routeStartInfo: RouteStartInfo) = onSdk(navi) { routeChanged() }
+        override fun onRouteEnded() = onSdk(navi) { routeChanged() }
+        override fun onRoutingCompleted() = onSdk(navi) { routeChanged() }
+        override fun onReRouteEnded() = onSdk(navi) { routeChanged() }
+        override fun onDestinationChanged() = onSdk(navi) { routeChanged() }
+        override fun onRouteCancelled() = onSdk(navi) { endRoute(); completeStop(false) }
+        override fun onDestinationArrived(destinationArrivedInfo: DestinationArrivedInfo) = onSdk(navi) { endRoute() }
+        override fun onNavigationStatus(status: NavigationStatus) = onSdk(navi) {
+            if (status == NavigationStatus.FREE_DRIVE) endRoute() else routeChanged()
         }
 
-        override fun onRouteEnded() = onMain { routeChanged() }
-        override fun onReRouteEnded() = onMain { routeChanged() }
-        override fun onDestinationChanged() = onMain { routeChanged() }
-        override fun onRouteCancelled() = onMain { endRoute(); completeStop(false) }
-        override fun onDestinationArrived(destinationArrivedInfo: DestinationArrivedInfo) = onMain { endRoute() }
-        override fun onNavigationStatus(status: RouteDriving) = onMain {
-            if (status == RouteDriving.START) routeChanged() else endRoute()
-        }
-
-        override fun onError(errorCode: NaviErrorCode) = onMain {
-            generation++
-            query = null
-            lastDestination = null
-            handler.removeCallbacks(queryTimeout)
-            publish(VehicleNavigationState.Unavailable)
-            completeStop(false)
-        }
+        override fun onError(errorCode: NaviErrorCode) = onSdk(navi) { failNavigation() }
     }
 
     override fun current() = state
@@ -130,24 +126,17 @@ private class PleosNavigationGateway(private val context: Context) : NavigationG
             return
         }
         if (sdk == null) {
-            try {
-                sdk = NaviHelper(context)
-                sdk?.initialize()
-                sdk?.addListener(listener)
-            } catch (_: RuntimeException) {
-                runCatching { sdk?.release() }
-                sdk = null
-                publish(VehicleNavigationState.Unavailable)
-                return
-            }
+            connect()
+            return
         }
-        beginQuery(QueryType.ROUTE_STATE, NaviHelper::getRouteStateInfo)
+        if (sdkListener != null) beginQuery(QueryType.ROUTE_STATE, NaviHelper::getRouteStateInfo)
     }
 
     override fun requestFirstStop(latitude: Double, longitude: Double, name: String, callback: (Boolean) -> Unit) {
         val navi = sdk
-        if (closed || navi == null || request != null || !hasPermission(NAVI_ROUTE_SEARCH) ||
-            state == VehicleNavigationState.Unavailable || !validCoordinates(latitude, longitude) || name.isBlank()
+        if (closed || navi == null || sdkListener == null || request != null || !hasPermission(NAVI_ROUTE_SEARCH) ||
+            (state != VehicleNavigationState.NoDestination && state !is VehicleNavigationState.Guiding) ||
+            !validCoordinates(latitude, longitude) || name.isBlank()
         ) {
             callback(false)
             return
@@ -161,8 +150,8 @@ private class PleosNavigationGateway(private val context: Context) : NavigationG
         handler.postDelayed(stopTimeout, STOP_TIMEOUT_MS)
         try {
             // Course stops have coordinates and a label. The provider decides whether it can route to them.
-            navi.requestRoute(RouteInfo(longitude = longitude, latitude = latitude, poiName = name,
-                poiId = "", address = "", poiSubId = ""))
+            navi.requestRoute(RouteInfo(latitude = latitude, longitude = longitude, displayLatitude = null,
+                displayLongitude = null, poiName = name, poiId = "", address = "", poiSubId = ""))
             routeChanged()
         } catch (_: RuntimeException) {
             completeStop(false)
@@ -176,17 +165,60 @@ private class PleosNavigationGateway(private val context: Context) : NavigationG
         observers.clear()
         query = null
         completeStop(false)
-        sdk?.let { navi ->
-            runCatching { navi.removeListener(listener) }
-            runCatching { navi.release() }
-        }
-        sdk = null
+        releaseSdk()
         lastDestination = null
         state = VehicleNavigationState.Unavailable
     }
 
-    private fun onMain(action: () -> Unit) {
-        handler.post { if (!closed) action() }
+    private fun connect() {
+        try {
+            val navi = NaviHelper(context)
+            sdk = navi
+            publish(VehicleNavigationState.Loading)
+            if (sdk !== navi) return
+            navi.initialize(
+                onConnected = {
+                    onSdk(navi) {
+                        if (sdkListener == null) {
+                            try {
+                                val listener = createListener(navi)
+                                navi.addListener(listener)
+                                sdkListener = listener
+                                refresh()
+                            } catch (_: RuntimeException) {
+                                failNavigation()
+                            }
+                        }
+                    }
+                },
+                onFailed = { onSdk(navi) { failNavigation() } },
+            )
+        } catch (_: RuntimeException) {
+            failNavigation()
+        }
+    }
+
+    private fun releaseSdk() {
+        val navi = sdk ?: return
+        sdk = null
+        val listener = sdkListener
+        sdkListener = null
+        if (listener != null) runCatching { navi.removeListener(listener) }
+        runCatching { navi.release() }
+    }
+
+    private fun failNavigation() {
+        generation++
+        query = null
+        lastDestination = null
+        handler.removeCallbacks(queryTimeout)
+        releaseSdk()
+        publish(VehicleNavigationState.Unavailable)
+        completeStop(false)
+    }
+
+    private fun onSdk(navi: NaviHelper, action: () -> Unit) {
+        handler.post { if (!closed && sdk === navi) action() }
     }
 
     private fun beginQuery(type: QueryType, action: NaviHelper.() -> Unit) {
@@ -196,10 +228,7 @@ private class PleosNavigationGateway(private val context: Context) : NavigationG
         try {
             navi.action()
         } catch (_: RuntimeException) {
-            query = null
-            handler.removeCallbacks(queryTimeout)
-            publish(VehicleNavigationState.Unavailable)
-            completeStop(false)
+            failNavigation()
         }
     }
 
